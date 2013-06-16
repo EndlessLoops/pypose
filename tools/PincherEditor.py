@@ -64,8 +64,8 @@ class PincherEditor(ToolPane):
         
         # slider settings
         self.slider_SP = [150,60,80,-45,512]#starting position a0,w,z,ga,g
-        self.slider_minL = [0,-20,-50,-90,0]
-        self.slider_maxL = [300,280,280,90,1023]
+        self.slider_minL = [0,-20,-60,-90,0]
+        self.slider_maxL = [300,310,310,90,1023]
         self.label_list = ["Rotation a0:  ","Extension w:  ","Height z:        ",
                            "Gripper angle ","Gripper:         "]  
         
@@ -195,10 +195,10 @@ class PincherEditor(ToolPane):
                 self.parent.sb.SetStatusText("Servo positions: " + str(self.dynamixels) +
                                               "      Tool Point: " + str(np.round(tool_point, 2)))
             else:
-                self.parent.sb.SetStatusText("Servo safety limits reached")
-                
+                self.parent.sb.SetStatusText("Servo safety limits reached")                
         else:
-            self.parent.sb.SetStatusText("Target Position Can NOT Be Reached")            
+            self.parent.sb.SetStatusText("Target Position Can NOT Be Reached") 
+            self.error = [0001]           
         
     
     def set_ax(self):#ax panel set up
@@ -236,7 +236,7 @@ class PincherEditor(ToolPane):
         speeds = [a - b for a, b in zip(self.dynamixels, self.oldmixels)]
         #limit speed to 100
         speeds = [x if (-100< x <100) else 100 for x in speeds]
-        if self.dynamixels != self.oldmixels and self.port != None:               
+        if self.dynamixels != self.oldmixels and self.port != None and self.error == []:               
             #load all the servo values
             for i, pos in enumerate(self.dynamixels):
                 self.port.setReg(i+1, P_GOAL_SPEED_L, [int(abs(speeds[i]))%256,int(abs(speeds[i]))>>8]) 
@@ -244,7 +244,7 @@ class PincherEditor(ToolPane):
         self.oldmixels = self.dynamixels
                 
     def live_bt(self, e=None):
-        
+        """ sliders and dynamixels are synched """
         if self.go_live == False:
             self.go_live = True
             self.toggle_live.SetLabel("live ON")
@@ -356,10 +356,9 @@ class PincherEditor(ToolPane):
             # select pose
             self.loadPose("pose"+str(i))
             self.posebox.SetSelection(self.posebox.FindString("pose"+str(i)))
-    
-    #click item in the posebox event   
-     
+        
     def loadPose(self, posename):
+        """ focus item in the posebox event"""
         if self.curpose == "":   # if we haven't yet, enable servo editors
             for slider_panel in self.sliders:
                 slider_panel.Enable()  #enable the sliders      
@@ -385,7 +384,6 @@ class PincherEditor(ToolPane):
             
     def addPose(self, e=None):
         """ Add a new pose to the listbox"""
-        print ("adding a new pose")
         if self.parent.project.name != "":
             dlg = wx.TextEntryDialog(self,'Pose Name:', 'New Pose Settings')
             dlg.SetValue("")
@@ -400,7 +398,6 @@ class PincherEditor(ToolPane):
             dlg.Destroy()
                
     def renamePose(self, e=None):
-        print ("renaming a pose")
         """ Rename a pose. """
         if self.curpose != "":
             dlg = wx.TextEntryDialog(self,'Name of pose:', 'Rename Pose')
@@ -418,7 +415,6 @@ class PincherEditor(ToolPane):
                 self.parent.project.save = True
 
     def remPose(self, e=None):
-        print ("removing a pose")
         """ Remove a pose. """
         if self.curpose != "":
             dlg = wx.MessageDialog(self, 'Are you sure you want to delete this pose?', 'Confirm', wx.OK|wx.CANCEL|wx.ICON_EXCLAMATION)
@@ -505,9 +501,11 @@ class Robot_Cord(object):
         self.z[1] = np.sin(self.a[1])*self.l[1]
     
     def calc_angles(self): #calculate all of the motor angles see diagram
-        self.a[2] = np.arctan((self.z[2]-self.z[1])/(self.w[2]-self.w[1]))-self.a[1]
-        self.a[3] = np.deg2rad(self.gripper_angle)-self.a[1]-self.a[2]  
-
+        if self.w[2]>self.w[1]:
+            self.a[2] = np.arctan((self.z[2]-self.z[1])/(self.w[2]-self.w[1]))-self.a[1]
+        else: #it is in the next quadrant
+            self.a[2] = ((np.arctan((self.z[2]-self.z[1])/(self.w[2]-self.w[1]))-self.a[1]))-np.pi
+        self.a[3] = np.deg2rad(self.gripper_angle)-self.a[1]-self.a[2]
     def calc_x_y(self):#calc x_y of servoscoordinates 
         for i in range(4):#fixed number of segments
             self.x[i] = self.w[i]*np.cos(self.a[0])
@@ -528,7 +526,7 @@ class Robot_Cord(object):
         ys = np.array(self.y).tolist()
         zs = np.array(self.z).tolist()
         return (xs, ys, zs)
-        
+            
     def get_dynamixel(self):#returns a list of dynamixals positions and error
         try: 
             dynamixals = [0]*5 #fixed number of motors
@@ -538,9 +536,7 @@ class Robot_Cord(object):
             dynamixals[3] = int(round(((self.a[3]-np.deg2rad(150))*-195.5696),0))#-150 degrees
             dynamixals[4] = self.gripper
             #todo add a function to check for error, collision...ect
-            if dynamixals[3]>860:
-                return dynamixals, [865]
-            error = [i for i in dynamixals if i>1024 or i<0] #safety limits
+            error = self.error_check(dynamixals)
             return dynamixals, error
         
         except:
@@ -565,7 +561,7 @@ class Robot_Cord(object):
         angles[1] = (dynamixels[1]*-(np.deg2rad(300)/1024))+np.deg2rad(240)
         angles[2] = (dynamixels[2]*-(np.deg2rad(300)/1024))+np.deg2rad(150)
         angles[3] = (dynamixels[3]*-(np.deg2rad(300)/1024))+np.deg2rad(150)
-        angles[4] = dynamixels[4]#this is gripper open,close not an angle
+        angles[4] = dynamixels[4]#this is gripper open,close servo not an angle
         return angles
         
     def angles_to_sliders(self, angles):    
@@ -590,7 +586,13 @@ class Robot_Cord(object):
     def dynamixels_to_sliders(self, dynamixels):
         angles = self.dynamixels_to_angles(dynamixels)
         return self.angles_to_sliders(angles)#return slider values
-        
-        
+    
+    def error_check(self, dynamixals):
+        """ servo safety limits"""#should there be angle limits?
+        dyna_lowLimit=[0,50,38,190,0]
+        dyna_upper_limit = [1023,975,1014,855,1023]
+        error = [val for i,val in enumerate(dynamixals) if val>dyna_upper_limit[i] or val<dyna_lowLimit[i]] #safety limits
+        return error
+                
 NAME = "pincher editor"
 STATUS = "opened pincher editor..."
